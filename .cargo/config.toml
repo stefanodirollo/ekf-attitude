@@ -1,0 +1,5 @@
+[build]
+rustdocflags = [
+  "--html-in-header",
+  "C:/Users/stefano.dirollo/.config/rustdoc/katex-header.html"
+]

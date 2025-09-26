@@ -2,7 +2,7 @@ use nalgebra::{Matrix3, Matrix4, RowVector3, SMatrix, Vector3, Vector4};
 
 type Matrix4_3 = SMatrix<f64, 4, 3>;
 
-/// Quaternion product: q ⊗ p, scalar-first [w,x,y,z]
+/// Quaternion product: q ⊗ p, in **scalar-first** order `[w, x, y, z]`
 ///
 /// # Arguments
 /// * `q` - First quaternion
@@ -38,27 +38,29 @@ pub fn q_norm(q: Vector4<f64>) -> Vector4<f64> {
     q / q_square_norm.sqrt()
 }
 
-/// Left-multiplication matrix Q_L(q) such that q ⊗ r = Q_L(q) r
+/// Left-multiplication matrix $Q_L(\mathbf{q})$ such that
+/// $\mathbf{r} \otimes \mathbf{q} = Q_L(\mathbf{q})\\mathbf{r}$
 ///
 /// # Arguments
-/// * `q` - Input quaternion
+/// * `q` — Input quaternion
 ///
 /// # Returns
-/// Left-multiplication matrix Q_L(q)
-///`
+/// * Right-multiplication matrix $Q_L(\mathbf{q})$
+///
 pub fn q_left(q: Vector4<f64>) -> Matrix4<f64> {
     let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
     Matrix4::from_row_slice(&[w, -x, -y, -z, x, w, -z, y, y, z, w, -x, z, -y, x, w])
 }
 
-/// Right-multiplication matrix Q_R(q) such that r ⊗ q = Q_R(q) r
+/// Right-multiplication matrix $Q_R(\mathbf{q})$ such that
+/// $\mathbf{r} \otimes \mathbf{q} = Q_R(\mathbf{q})\\mathbf{r}$
 ///
 /// # Arguments
-/// * `q` - Input quaternion
+/// * `q` — Input quaternion
 ///
 /// # Returns
-/// Right-multiplication matrix Q_R(q)
-///`
+/// * Right-multiplication matrix $Q_R(\mathbf{q})$
+///
 pub fn q_right(q: Vector4<f64>) -> Matrix4<f64> {
     let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
     Matrix4::from_row_slice(&[w, -x, -y, -z, x, w, z, -y, y, -z, w, x, z, y, -x, w])
@@ -80,38 +82,38 @@ pub fn skew(v: &Vector3<f64>) -> Matrix3<f64> {
 /// measurement, assuming the angular rate is (approximately) constant over `dt`.
 ///
 /// Mathematically:
-/// - Let **θ** = ω_eff · dt  (integrated angle, in rad)
-/// - Let **φ** = ||θ||
+/// - Let $ \boldsymbol{\theta} = \boldsymbol{\omega}_{\text{eff}}\cdot dt $  (integrated angle vector, in rad)
+/// - Let $ \varphi = \lVert \boldsymbol{\theta} \rVert $
 /// - The delta quaternion is:  
-///   δq = exp(½ · [0, θ]) = [ cos(φ/2),  (sin(φ/2)/φ) · θ ]
+///   $$ \delta q = \exp\Bigl(\tfrac{1}{2}[0, \boldsymbol{\theta}]\Bigr)
+///      = \Bigl[ \cos\frac{\varphi}{2},
+///                \frac{\sin(\varphi/2)}{\varphi}\boldsymbol{\theta} \Bigr] $$
 ///
-/// This function returns that unit quaternion in **scalar-first** order `[w, x, y, z]`.
+/// This function returns that unit quaternion in **scalar-first** order $[w, x, y, z]$.
 /// A small-angle branch avoids division by zero and improves numerical stability,
 /// ensuring the first-order consistency with Euler integration:
-/// δq ≈ [ 1, ½ θ ]  +  O(dt²).
+///
+/// $$ \delta q \approx \bigl[1,\tfrac{1}{2}\boldsymbol{\theta}\bigr] + O(dt^2). $$
 ///
 /// # Arguments
-/// * `omega_eff` - Bias-corrected body angular rate `ω_m - b` in **rad/s**.
-/// * `dt`        - Time step in **seconds**.
+/// * `omega_eff` — Bias-corrected body angular rate vector $ \boldsymbol{\omega}_m - \boldsymbol{b} $ in **rad/s**.
+/// * `dt`        — Time step in **seconds**.
 ///
 /// # Returns
-/// * `Vector4<f64>` — The delta quaternion **δq = [w, x, y, z]** (approximately unit-norm).
-///
-/// # Panics
-/// * This function does **not** panic.
-///
-/// # Complexity
-/// * O(1), allocation-free.
+/// * `Vector4<f64>` — The delta quaternion  
+///   $ \delta q = [w, x, y, z] $ (approximately unit-norm).
 ///
 /// # Notes
-/// * Apply it to propagate attitude: `q_next = δq ⊗ q_prev`.
-/// * For very small `φ`, it uses the series  
-///   `cos(φ/2) ≈ 1 − φ²/8`, `sin(φ/2)/φ ≈ 1/2 − φ²/48`.
+/// * Apply it to propagate attitude: $ q_{\text{next}} = \delta q \otimes q_{\text{prev}} $.
+/// * For very small $ \varphi $, it uses the series expansions:  
+///   $ \cos\bigl(\tfrac{\varphi}{2}\bigr) \approx 1 - \tfrac{\varphi^2}{8} $,  
+///   $ \frac{\sin(\varphi/2)}{\varphi} \approx \tfrac{1}{2} - \tfrac{\varphi^2}{48} $.
 /// * If you change the small-angle threshold, keep it consistent with double precision.
 ///
 /// # Examples
 /// ```
 /// use nalgebra::{Vector3, Vector4};
+/// use rust_ekf::quaternion_utils::dq_from_gyro;
 ///
 /// // zero rate -> identity delta quaternion
 /// let dq = dq_from_gyro(Vector3::new(0.0, 0.0, 0.0), 0.01);
@@ -144,45 +146,73 @@ pub fn dq_from_gyro(omega_eff: Vector3<f64>, dt: f64) -> Vector4<f64> {
 }
 
 /// Computes the Jacobian **∂(δq)/∂b** of the delta–quaternion w.r.t. the gyro bias `b`,
-/// evaluated at the bias–corrected angular rate `omega_eff = ω_m - b`.
+/// evaluated at the bias–corrected angular rate $\boldsymbol{\omega}_{\text{eff}} = \boldsymbol{\omega}_m - \boldsymbol{b}$.
 ///
-/// Let  
-///   θ = (ω_m − b)·Δt,  φ = ||θ||,  δq = exp(½·[0, θ]) = [ w; v ] .  
-/// Then
-///   ∂(δq)/∂b = [ ∂w/∂θ ; ∂v/∂θ ] · ∂θ/∂b  with  ∂θ/∂b = −Δt·I₃.
+/// Let
+/// - $ \boldsymbol{\theta} = (\boldsymbol{\omega}_m - \boldsymbol{b}) \cdot \Delta t $
+/// - $ \varphi = \lVert \boldsymbol{\theta} \rVert $
+/// - $ \delta q = \exp\Bigl(\tfrac{1}{2}[0,\boldsymbol{\theta}]\Bigr) = [w, \boldsymbol{v}] $
+///
+/// Then:
+///
+/// $$
+/// \frac{\partial \boldsymbol{\delta q}}{\partial \boldsymbol{b}} =
+/// \begin{bmatrix}
+///   \frac{\partial w}{\partial \boldsymbol{\theta}} \\\\
+///   \frac{\partial \boldsymbol{v}}{\partial \boldsymbol{\theta}}
+/// \end{bmatrix}
+/// \cdot
+/// \frac{\partial \boldsymbol{\theta}}{\partial \boldsymbol{b}}
+/// $$
+///
+/// with $ \tfrac{\partial \boldsymbol{\theta}}{\partial \boldsymbol{b}} = -\Delta t \cdot I_3 $
 ///
 /// Closed-form derivatives used here (small-angle safe):
-///   ∂w/∂θ = −(sin(φ/2)/(2φ)) · θᵀ       (row 1×3)  
-///   ∂v/∂θ = a·I₃ + k·θθᵀ                (3×3)  
-/// where a = sin(φ/2)/φ and k = ((½)cos(φ/2)φ − sin(φ/2))/φ³,  
-/// with series for φ→0:  cos(φ/2)≈1−φ²/8,  a≈½−φ²/48,  k≈−1/24.
+/// - $ \tfrac{\partial w}{\partial \boldsymbol{\theta}}
+///     = -\dfrac{\sin(\varphi/2)}{2\varphi}\cdot \boldsymbol{\theta}^\top $  (row $1\times 3$)  
+/// - $ \tfrac{\partial \boldsymbol{v}}{\partial \boldsymbol{\theta}}
+///     = a\cdot I_3 + k\boldsymbol{\theta}\boldsymbol{\theta}^\top $  ($3\times 3$)
+///
+/// where $ a = \dfrac{\sin(\varphi/2)}{\varphi} $ and $ k = \dfrac{ \tfrac{1}{2}\cos(\varphi/2)\varphi - \sin(\varphi/2)}{\varphi^3} $
+///
+/// With series expansions for small $\varphi \to 0$:  
+/// - $ \cos(\tfrac{\varphi}{2}) \approx 1 - \tfrac{\varphi^2}{8} $  
+/// - $ a \approx \tfrac{1}{2} - \tfrac{\varphi^2}{48} $  
+/// - $ k \approx -\tfrac{1}{24} $
 ///
 /// # Arguments
-/// * `omega_eff` — Bias-corrected body rate (rad/s), i.e. `ω_m − b`.
-/// * `dt`        — Time step Δt (s).
+/// * `omega_eff` — Bias-corrected body rate vector (rad/s), i.e. $ \boldsymbol{\omega}_m - \boldsymbol{b} $.
+/// * `dt`        — Time step $\Delta t$ (s).
 ///
 /// # Returns
-/// * `4×3` matrix: Jacobian **∂(δq)/∂b**, rows ordered `[dw/db; dv/db]` and
-///   quaternion in scalar-first order `[w, x, y, z]`.
+/// * `4×3` matrix: Jacobian $ \tfrac{\partial \delta \boldsymbol{q}}{\partial \boldsymbol{b}} $, rows ordered $[\partial w/\partial b \partial \boldsymbol{v}/\partial b]$
+///   with quaternion in scalar-first order $[w, x, y, z]$.
 ///
 /// # Notes
-/// * At zero rate (θ=0) one gets ∂w/∂b = 0 and ∂v/∂b = −½·Δt·I₃.
-/// * This Jacobian is the **top-right block** of the discrete transition Φ for
-///   a full-state EKF with `x=[q,b]`:  Φ = [[Q_L(δq), Q_R(q_prev)·∂δq/∂b],[0,I]].
+/// * At zero rate ($\boldsymbol{\theta}=0$):  
+///   - $ \tfrac{\partial w}{\partial \boldsymbol{b}} = 0 $  
+///   - $ \tfrac{\partial \boldsymbol{v}}{\partial \boldsymbol{b}} = -\tfrac{1}{2}\Delta tI_3 $
+/// * This Jacobian is the **top-right block** of the discrete transition $\Phi$ for
+///   a full-state EKF with $ x = [\boldsymbol{q},\boldsymbol{b}] $:  
+///   $$ \Phi =
+///     \begin{bmatrix}
+///         Q_L(\delta q) & Q_R(q_{\text{prev}}) \tfrac{\partial \delta \boldsymbol{q}}{\partial \boldsymbol{b}} \\\\
+///         0 & I
+///     \end{bmatrix}
+///   $$
 ///
 /// # Example
 /// ```
-/// use nalgebra::{SMatrix, Vector3};
-/// // If you don't have the alias in your crate, define it for the test:
-/// type Matrix3_3 = SMatrix<f64, 3, 3>;
+/// use nalgebra::{Matrix3, Vector3};
+/// use rust_ekf::quaternion_utils::ddq_db;
 ///
 /// // Zero rate: θ=0 ⇒ ∂δq/∂b = [0; -½·dt·I]
 /// let dt = 0.01;
-/// let j = d_deltaq_db(Vector3::new(0.0, 0.0, 0.0), dt);
+/// let j = ddq_db(Vector3::new(0.0, 0.0, 0.0), dt);
 /// let top = j.fixed_rows::<1>(0);
 /// let bot = j.fixed_rows::<3>(1);
 /// assert!(top.iter().all(|e| e.abs() < 1e-12));
-/// let expect = -0.5 * dt * Matrix3_3::identity();
+/// let expect = -0.5 * dt * Matrix3::identity();
 /// assert!((bot - expect).norm() < 1e-12);
 /// ```
 pub fn ddq_db(omega_eff: Vector3<f64>, dt: f64) -> Matrix4_3 {
@@ -233,4 +263,126 @@ pub fn ddq_db(omega_eff: Vector3<f64>, dt: f64) -> Matrix4_3 {
     d.fixed_view_mut::<1, 3>(0, 0).copy_from(&(-dt * dw_dtheta));
     d.fixed_view_mut::<3, 3>(1, 0).copy_from(&(-dt * dv_dtheta));
     d
+}
+
+/// Rotates a 3D vector from the inertial/world frame **into the body frame** using a
+/// **unit quaternion** in scalar-first form, i.e. `q = [q0, qv.x, qv.y, qv.z]`.
+///
+/// # Math
+/// Implements the closed-form “sandwich product” expansion
+/// \[ R(q)\,u = (q0^2 - qv·qv)\,u + 2\,qv\,(qv·u) + 2\,q0\,(qv × u) \]
+/// which is equivalent to ` [0, R(q)u] = q ⊗ [0, u] ⊗ q* ` for a unit quaternion.
+/// This avoids building the 3×3 rotation matrix and uses only dot/cross products.
+///
+/// # Arguments
+/// * `q0` — scalar part `w` of the quaternion.
+/// * `qv` — vector part `(x, y, z)` of the quaternion.
+/// * `vi` — vector expressed in the **inertial** frame to be rotated into the **body** frame.
+///
+/// # Returns
+/// Vector expressed in the **body** frame: `vb = R(q) * vi`.
+///
+/// # Conventions
+/// - This function assumes the quaternion performs the **active rotation** `R(q): inertial → body`,
+///   i.e. `[0, vb] = q ⊗ [0, vi] ⊗ q*`.
+/// - If in your code `q` encodes the opposite mapping (e.g. **body → inertial**), pass the
+///   conjugate instead: call `inertial2body(q0, &(-qv), vi)`.
+/// - `q` should be **unit-norm**. If not, the result is scaled by `‖q‖^2` (since `q*` is not `q⁻¹`
+///   unless `‖q‖=1`). Normalize beforehand if needed.
+///
+/// # Example
+/// ```
+/// use nalgebra::Vector3;
+/// use std::f64::consts::FRAC_1_SQRT_2; // cos(pi/4) = sin(pi/4)
+/// use rust-ekf::quaternion_utils::inertial2body
+///
+/// // 90° about +Z: q = [cos(π/4), 0, 0, sin(π/4)]
+/// let q0 = FRAC_1_SQRT_2;
+/// let qv = Vector3::new(0.0, 0.0, FRAC_1_SQRT_2);
+/// let vi = Vector3::new(1.0, 0.0, 0.0); // x-axis in inertial
+///
+/// let vb = inertial2body(q0, &qv, &vi);
+/// assert!((vb - Vector3::new(0.0, 1.0, 0.0)).norm() < 1e-12);
+/// ```
+///
+/// # Notes
+/// - `O(1)` time, no heap allocations.
+/// - For robustness during debugging you may assert near-unit norm of `q`.
+pub fn inertial2body(q0: f64, qv: &Vector3<f64>, vi: &Vector3<f64>) -> Vector3<f64> {
+    // Closed-form quaternion rotation (scalar-first):
+    // R(q) * vi = (q0^2 - ||qv||^2) * vi + 2 qv (qv·vi) + 2 q0 (qv × vi)
+
+    // Computation of (q0^2 - ||qv||^2):
+    let w2_minus_v2 = q0 * q0 - qv.dot(qv);
+
+    // qv·vi (scalar)
+    let dot = qv.dot(vi);
+
+    // qv × vi (vector)
+    let cross = qv.cross(vi);
+
+    // Assemble the expression:
+    w2_minus_v2 * vi + 2.0 * (qv * dot) + 2.0 * (q0 * cross)
+}
+
+/// Computes the Jacobian of the acceleration with respect to the quaternion.
+///
+/// Given a quaternion represented as $\mathbf{q} = [w, \mathbf{q_v}]$ and a gravity vector $\mathbf{g} \in \mathbb{R}^3$
+/// this function returns the Jacobian matrix:
+///
+/// $$
+/// J \in \mathbb{R}^{3 \times 4}, \quad
+/// J =
+/// \begin{bmatrix}
+///     \frac{\partial h}{\partial w}
+///     \frac{\partial h}{\partial x}
+///     \frac{\partial h}{\partial y}
+///     \frac{\partial h}{\partial z}
+/// \end{bmatrix}
+/// $$
+///
+/// with the following intermediate terms:
+///
+/// $$
+/// \frac{\partial h}{\partial \mathbf{q_v}} = 2 (\mathbf{q}_v \cdot \mathbf{g}) I_3
+///     + 2 \mathbf{q_v} \mathbf{g}^T
+///     - 2 \mathbf{g} \mathbf{q_v}^T
+///     - 2 w \mathrm{skew}(\mathbf{g})
+/// $$
+///
+/// $$
+/// \frac{\partial h}{\partial w} = 2 q_0 \mathbf{g} + 2 (\mathbf{q_v} \times \mathbf{g})
+/// $$
+///
+/// # Arguments
+/// * `q0` - Scalar part of the quaternion.
+/// * `qv` - Vector part of the quaternion ($\mathbf{q_v}$).
+/// * `g` - Gravity vector ($\mathbf{g}$).
+///
+/// # Returns
+/// * `SMatrix<f64, 3, 4>` - The Jacobian matrix
+///
+/// # Example
+/// ```
+/// use rust-ekf::quaternion_utils::dh_dq
+///
+/// let q0 = 1.0;
+/// let qv = Vector3::new(0.0, 0.0, 0.0);
+/// let g = Vector3::new(0.0, 0.0, -9.81);
+/// let j = dh_dq(q0, &qv, &g);
+/// assert_eq!(j.shape(), (3,4));
+/// ```
+pub fn dh_dq(q0: f64, qv: &Vector3<f64>, g: &Vector3<f64>) -> SMatrix<f64, 3, 4> {
+    let dot = qv.dot(g);
+    let i3 = Matrix3::identity();
+    let j_qv = 2.0 * dot * i3 + 2.0 * (qv * g.transpose())
+        - 2.0 * (g * qv.transpose())
+        - 2.0 * q0 * skew(g);
+    let j_w = 2.0 * q0 * g + 2.0 * (qv.cross(g));
+    SMatrix::<f64, 3, 4>::from_columns(&[
+        j_w,
+        j_qv.column(0).into(),
+        j_qv.column(1).into(),
+        j_qv.column(2).into(),
+    ])
 }

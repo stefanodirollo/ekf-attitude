@@ -1,15 +1,16 @@
-use crate::quaternion_utils::{dq_from_gyro, q_left, q_mul, q_norm, q_right, skew};
-use nalgebra::{SMatrix, SVector, Vector3, Vector4, vector};
+use crate::quaternion_utils::{
+    ddq_db, dh_dq, dq_from_gyro, inertial2body, q_left, q_mul, q_norm, q_right,
+};
+use nalgebra::{Matrix3, SMatrix, SVector, Vector3, Vector4, vector};
 //use nqlgebra::UnitQuaternion;
 
 // Define custom types for fixed-size matrices and vectors
 type Vector7_1 = SVector<f64, 7>;
 type Matrix7_7 = SMatrix<f64, 7, 7>;
-type Matrix3_3 = SMatrix<f64, 3, 3>;
 type Matrix3_7 = SMatrix<f64, 3, 7>;
 
 /// EKF data struct
-pub struct EKF {
+pub struct AttitudeEKF {
     /// state State vector with quaternion and gyro biases: [q0, q1, q2, q3, bx, by, bz]
     pub state: Vector7_1,
     /// covariance Covariance matrix P
@@ -17,10 +18,10 @@ pub struct EKF {
     /// process_noise Process noise Q
     pub process_noise: Matrix7_7,
     /// measurement_noise Measurement noise R
-    pub measurement_noise: Matrix3_3,
+    pub measurement_noise: Matrix3<f64>,
 }
 
-impl EKF {
+impl AttitudeEKF {
     /// Create a new EKF instance, passing accelerometer data to calculate the initial quaternion
     /// (avoids using 0's for initial orientation)
     ///
@@ -40,10 +41,10 @@ impl EKF {
             );
 
             // Calculate quaternion from accelerometer data
-            let mut q0: f64 = (0.5 * (1.0 + az)).sqrt();
-            let mut q1: f64 = -ay / (2.0 * q0);
-            let mut q2: f64 = ax / (2.0 * q0);
-            let mut q3: f64 = 0.0;
+            let mut q0 = (0.5 * (1.0 + az)).sqrt();
+            let mut q1 = -ay / (2.0 * q0);
+            let mut q2 = ax / (2.0 * q0);
+            let mut q3 = 0.0_f64;
             let norm: f64 = (q0.powi(2) + q1.powi(2) + q2.powi(2) + q3.powi(2)).sqrt();
             q0 /= norm;
             q1 /= norm;
@@ -64,12 +65,12 @@ impl EKF {
         process_noise[(5, 5)] = 0.01; // by
         process_noise[(6, 6)] = 0.01; // bz
 
-        let mut measurement_noise = Matrix3_3::zeros();
+        let mut measurement_noise = Matrix3::zeros();
         measurement_noise[(0, 0)] = 0.02; // ax
         measurement_noise[(1, 1)] = 0.02; // ay
         measurement_noise[(2, 2)] = 0.02; // az
 
-        EKF {
+        AttitudeEKF {
             state: vector!(q0, q1, q2, q3, 0.0, 0.0, 0.0),
             covariance: Matrix7_7::identity(),
             process_noise,
@@ -81,7 +82,7 @@ impl EKF {
     ///
     /// # Arguments
     /// * `gyro` - Measured angular rate in the **body** frame `[rad/s]`. The method subtracts the current bias
-    /// *          estimate from `self.state[4..=6]` internally.
+    ///   estimate from `self.state[4..=6]` internally.
     /// * `dt`   - Integration time step in **seconds**.
     ///
     /// # Returns
@@ -109,25 +110,53 @@ impl EKF {
         // Build Φ = [[ Q_L(δq) ,  Q_R(q_prev) * ∂δq/∂b ],
         //            [ 0       ,  I3                      ]]
         let phi_qq = q_left(dq); // 4x4
-        let d_dq_db = d_deltaq_db(omega_eff, dt); // 4x3
-        let phi_qb = qr(q_prev) * d_dq_db; // 4x3
-    }
-}
+        let ddq_db = ddq_db(omega_eff, dt); // 4x3
+        let phi_qb = q_right(q_prev) * ddq_db; // 4x3
+        let mut phi = Matrix7_7::identity();
+        phi.fixed_view_mut::<4, 4>(0, 0).copy_from(&phi_qq); // top-left 4x4
+        phi.fixed_view_mut::<4, 3>(0, 4).copy_from(&phi_qb); // top-right 4x3
 
-/// Short description.
-///
-/// # Arguments
-/// * `param1` - description
-/// * `param2` - description
-///
-/// # Returns
-/// return description.
-///
-/// # Example
-/// ```
-/// let res = crate::module::fn_name(param1, param2);
-/// assert_eq!(res, expected);
-/// ```
-pub fn fn_name(param1: i32, param2: i32) -> i32 {
-    param1 + param2
+        self.covariance = phi * self.covariance * phi.transpose() + self.process_noise;
+    }
+
+    pub fn update(&mut self, z_acc: Vector3<f64>, g_i: Vector3<f64>) {
+        // 1) Predicted measurement h(x) = R(q) * g_i
+        let q0 = self.state[0];
+        let qv = Vector3::new(self.state[1], self.state[2], self.state[3]);
+        let h = inertial2body(q0, &qv, &g_i);
+
+        // 2) Jacobian H = [ ∂h/∂q (3x4) | 0 (3x3) ]
+        let h_q = dh_dq(q0, &qv, &g_i);
+        let mut H: Matrix3_7 = Matrix3_7::zeros();
+        H.fixed_view_mut::<3, 4>(0, 0).copy_from(&h_q);
+
+        // 3) Innovation
+        let y = z_acc - h;
+
+        // 4) Kalman gain K = P Hᵀ (H P Hᵀ + R)⁻¹
+        let ht = H.transpose();
+        let s = H * self.covariance * ht + self.measurement_noise; // 3x3
+        // Prefer a robust inversion (Cholesky) for SPD S
+        let s_inv = s.cholesky().map(|c| c.inverse()).unwrap_or_else(|| {
+            s.try_inverse()
+                .expect("Innovation covariance not invertible")
+        });
+        let k = self.covariance * ht * s_inv; // 7x3
+
+        // 5) State update (additive on [q,b]), then re-normalize quaternion
+        self.state += k * y;
+        self.q_state_norm();
+
+        // 6) Covariance update (Joseph form)
+        let i = Matrix7_7::identity();
+        let i_kh = i - k * H;
+        self.covariance =
+            i_kh * self.covariance * i_kh.transpose() + k * self.measurement_noise * k.transpose();
+    }
+
+    fn q_state_norm(&mut self) {
+        let q = self.state.fixed_rows::<4>(0).into_owned();
+        let q_normalized = q_norm(q);
+        self.state.fixed_rows_mut::<4>(0).copy_from(&q_normalized);
+    }
 }
