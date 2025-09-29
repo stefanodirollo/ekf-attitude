@@ -113,7 +113,7 @@ pub fn skew(v: &Vector3<f64>) -> Matrix3<f64> {
 /// # Examples
 /// ```
 /// use nalgebra::{Vector3, Vector4};
-/// use rust_ekf::quaternion_utils::dq_from_gyro;
+/// use ekf_attitude::quaternion_utils::dq_from_gyro;
 ///
 /// // zero rate -> identity delta quaternion
 /// let dq = dq_from_gyro(Vector3::new(0.0, 0.0, 0.0), 0.01);
@@ -204,7 +204,7 @@ pub fn dq_from_gyro(omega_eff: Vector3<f64>, dt: f64) -> Vector4<f64> {
 /// # Example
 /// ```
 /// use nalgebra::{Matrix3, Vector3};
-/// use rust_ekf::quaternion_utils::ddq_db;
+/// use ekf_attitude::quaternion_utils::ddq_db;
 ///
 /// // Zero rate: θ=0 ⇒ ∂δq/∂b = [0; -½·dt·I]
 /// let dt = 0.01;
@@ -294,7 +294,7 @@ pub fn ddq_db(omega_eff: Vector3<f64>, dt: f64) -> Matrix4_3 {
 /// ```
 /// use nalgebra::Vector3;
 /// use std::f64::consts::FRAC_1_SQRT_2; // cos(pi/4) = sin(pi/4)
-/// use rust-ekf::quaternion_utils::inertial2body
+/// use ekf_attitude::quaternion_utils::inertial2body;
 ///
 /// // 90° about +Z: q = [cos(π/4), 0, 0, sin(π/4)]
 /// let q0 = FRAC_1_SQRT_2;
@@ -364,7 +364,9 @@ pub fn inertial2body(q0: f64, qv: &Vector3<f64>, vi: &Vector3<f64>) -> Vector3<f
 ///
 /// # Example
 /// ```
-/// use rust-ekf::quaternion_utils::dh_dq
+/// use nalgebra::Vector3;
+/// use ekf_attitude::quaternion_utils::{dh_dq};
+/// use physical_constants::STANDARD_ACCELERATION_OF_GRAVITY;
 ///
 /// let q0 = 1.0;
 /// let qv = Vector3::new(0.0, 0.0, 0.0);

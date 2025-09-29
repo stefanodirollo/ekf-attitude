@@ -3,6 +3,7 @@ use crate::quaternion_utils::{
 };
 use nalgebra::{Matrix3, SMatrix, SVector, Vector3, Vector4, vector};
 //use nqlgebra::UnitQuaternion;
+use physical_constants::STANDARD_ACCELERATION_OF_GRAVITY;
 
 // Define custom types for fixed-size matrices and vectors
 type Vector7_1 = SVector<f64, 7>;
@@ -119,29 +120,30 @@ impl AttitudeEKF {
         self.covariance = phi * self.covariance * phi.transpose() + self.process_noise;
     }
 
-    pub fn update(&mut self, z_acc: Vector3<f64>, g_i: Vector3<f64>) {
+    pub fn update(&mut self, z_acc: Vector3<f64>) {
         // 1) Predicted measurement h(x) = R(q) * g_i
+        let g_i = Vector3::new(0.0, 0.0, -STANDARD_ACCELERATION_OF_GRAVITY);
         let q0 = self.state[0];
         let qv = Vector3::new(self.state[1], self.state[2], self.state[3]);
         let h = inertial2body(q0, &qv, &g_i);
 
-        // 2) Jacobian H = [ ∂h/∂q (3x4) | 0 (3x3) ]
+        // 2) Jacobian J = [ ∂h/∂q (3x4) | 0 (3x3) ]
         let h_q = dh_dq(q0, &qv, &g_i);
-        let mut H: Matrix3_7 = Matrix3_7::zeros();
-        H.fixed_view_mut::<3, 4>(0, 0).copy_from(&h_q);
+        let mut h_j: Matrix3_7 = Matrix3_7::zeros();
+        h_j.fixed_view_mut::<3, 4>(0, 0).copy_from(&h_q);
 
         // 3) Innovation
         let y = z_acc - h;
 
         // 4) Kalman gain K = P Hᵀ (H P Hᵀ + R)⁻¹
-        let ht = H.transpose();
-        let s = H * self.covariance * ht + self.measurement_noise; // 3x3
+        let h_j_t = h_j.transpose();
+        let s = h_j * self.covariance * h_j_t + self.measurement_noise; // 3x3
         // Prefer a robust inversion (Cholesky) for SPD S
         let s_inv = s.cholesky().map(|c| c.inverse()).unwrap_or_else(|| {
             s.try_inverse()
                 .expect("Innovation covariance not invertible")
         });
-        let k = self.covariance * ht * s_inv; // 7x3
+        let k = self.covariance * h_j_t * s_inv; // 7x3
 
         // 5) State update (additive on [q,b]), then re-normalize quaternion
         self.state += k * y;
@@ -149,7 +151,7 @@ impl AttitudeEKF {
 
         // 6) Covariance update (Joseph form)
         let i = Matrix7_7::identity();
-        let i_kh = i - k * H;
+        let i_kh = i - k * h_j;
         self.covariance =
             i_kh * self.covariance * i_kh.transpose() + k * self.measurement_noise * k.transpose();
     }
@@ -158,5 +160,76 @@ impl AttitudeEKF {
         let q = self.state.fixed_rows::<4>(0).into_owned();
         let q_normalized = q_norm(q);
         self.state.fixed_rows_mut::<4>(0).copy_from(&q_normalized);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use core::f64;
+
+    use approx::assert_relative_eq;
+
+    use super::*;
+
+    #[test]
+    fn initialization_test() {
+        let ekf = AttitudeEKF::new(None);
+        assert_eq!(ekf.state.len(), 7);
+        assert_relative_eq!(ekf.state[0], 1.0, epsilon = f64::EPSILON);
+        assert_relative_eq!(ekf.state[1], 0.0, epsilon = f64::EPSILON);
+        assert_relative_eq!(ekf.state[2], 0.0, epsilon = f64::EPSILON);
+        assert_relative_eq!(ekf.state[3], 0.0, epsilon = f64::EPSILON);
+        assert_relative_eq!(ekf.state[4], 0.0, epsilon = f64::EPSILON);
+        assert_relative_eq!(ekf.state[5], 0.0, epsilon = f64::EPSILON);
+        assert_relative_eq!(ekf.state[6], 0.0, epsilon = f64::EPSILON);
+        // Covariance and noise matrices should be square
+        assert!(ekf.covariance.is_square());
+        assert!(ekf.process_noise.is_square());
+        assert!(ekf.measurement_noise.is_square());
+    }
+
+    #[test]
+    fn predict_test() {
+        // Test the predict step with sample gyro data and a fixed time step
+        let mut ekf = AttitudeEKF::new(None);
+        let dt = 0.01;
+        let gyro_data = Vector3::new(0.1, 0.2, 0.3); // in rad/s
+        let initial_state = ekf.state;
+
+        ekf.predict(gyro_data, dt);
+        let new_state = ekf.state;
+
+        // Check that the quaternion has changed from the identity
+        let quat_changed = (initial_state[0] - new_state[0]).abs() > 1e-6
+            || (initial_state[1] - new_state[1]).abs() > 1e-6
+            || (initial_state[2] - new_state[2]).abs() > 1e-6
+            || (initial_state[3] - new_state[3]).abs() > 1e-6;
+        assert!(quat_changed, "Quaternion did not change after predict.");
+
+        // Since we lock yaw, we expect the z bias (state[6]) to be 0
+        assert_relative_eq!(new_state[6], 0.0, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn update_test() {
+        // Test that the update step correctly corrects the state using accelerometer data.
+        let mut ekf = AttitudeEKF::new(None);
+        let dt = 0.01;
+        let gyro_data = Vector3::new(0.1, 0.2, 0.3);
+        // Run a predict to have a non-identity quaternion
+        ekf.predict(gyro_data, dt);
+
+        // Simulate an accelerometer measurement equivalent to gravity pointing along negative Z
+        let accel_data = Vector3::new(0.0, 0.0, STANDARD_ACCELERATION_OF_GRAVITY);
+        ekf.update(accel_data);
+
+        let new_state = ekf.state;
+        // Verify that the quaternion remains normalized
+        let norm = (new_state[0].powi(2)
+            + new_state[1].powi(2)
+            + new_state[2].powi(2)
+            + new_state[3].powi(2))
+        .sqrt();
+        assert_relative_eq!(norm, 1.0, epsilon = 1e-6);
     }
 }

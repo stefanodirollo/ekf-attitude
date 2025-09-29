@@ -1,10 +1,12 @@
 [package]
-name = "rust-ekf"
+name = "ekf-attitude"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+approx = "0.5.1"
 nalgebra = "0.32"
+physical_constants = "0.5.0"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--html-in-header", "katex-header.html"]
